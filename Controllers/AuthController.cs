@@ -15,6 +15,7 @@ public class AuthController : ControllerBase
     {
         public string? Email { get; set; }
         public string? Password { get; set; }
+        public string? CowboyName { get; set; }
     }
 
     public AuthController(IConfiguration configuration)
@@ -32,9 +33,12 @@ public class AuthController : ControllerBase
         var password = body.Password ?? "";
         if (password.Length < MinPasswordLength) return Ok(new { status = "error", message = "The password needs at least 8 characters." });
 
-        var userId = await UserStore.CreateAsync(_connectionString, email, PasswordHasher.Hash(password));
+        var cowboyName = (body.CowboyName ?? "").Trim();
+        if (cowboyName.Length < 2 || cowboyName.Length > 40) return Ok(new { status = "error", message = "The cowboy name needs 2 to 40 characters." });
+
+        var userId = await UserStore.CreateAsync(_connectionString, email, PasswordHasher.Hash(password), cowboyName);
         if (userId == null) return Ok(new { status = "error", message = "That email is already registered." });
-        return Ok(new { status = "ok", token = JwtService.Create(userId.Value, email) });
+        return Ok(new { status = "ok", token = JwtService.Create(userId.Value, email), cowboyName });
     }
 
     /// <summary>POST /api/auth/login - Checks the email and password and returns a sign-in token.</summary>
@@ -47,7 +51,7 @@ public class AuthController : ControllerBase
         {
             return Ok(new { status = "error", message = "Email or password is wrong." });
         }
-        return Ok(new { status = "ok", token = JwtService.Create(user.Id, user.Email) });
+        return Ok(new { status = "ok", token = JwtService.Create(user.Id, user.Email), cowboyName = user.CowboyName });
     }
 
     /// <summary>GET /api/auth/me - Says who is signed in, based on the token sent in the Authorization header.</summary>
