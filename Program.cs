@@ -142,6 +142,18 @@ catch (Exception seedEx)
     app.Logger.LogError(seedEx, "Could not set up the cowboys table: {Message}", seedEx.Message);
 }
 
+// Create the candidate tables with their made-up sample data (skipped when they already have rows)
+try
+{
+    var defaultConnection = app.Configuration.GetConnectionString("DefaultConnection");
+    if (!string.IsNullOrEmpty(defaultConnection))
+        await Backend.Services.CandidateStore.EnsureSampleDataAsync(defaultConnection);
+}
+catch (Exception candidateEx)
+{
+    app.Logger.LogError(candidateEx, "Could not set up the candidate tables: {Message}", candidateEx.Message);
+}
+
 try
 {
 app.Run();
