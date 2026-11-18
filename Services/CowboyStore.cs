@@ -70,6 +70,16 @@ public static class CowboyStore
         return cowboys;
     }
 
+    /// <summary>Raises one cowboy's salary by 10%. Returns the new salary, or null when no cowboy has that id.</summary>
+    public static async Task<decimal?> RaiseSalaryAsync(string connectionString, int id)
+    {
+        await using var conn = await OpenAsync(connectionString);
+        await using var cmd = new NpgsqlCommand("UPDATE cowboys SET salary = ROUND(salary * 1.10, 2) WHERE id = @id RETURNING salary;", conn);
+        cmd.Parameters.AddWithValue("id", id);
+        var result = await cmd.ExecuteScalarAsync();
+        return result is decimal salary ? salary : null;
+    }
+
     // Same search_path as the other controllers (the database role has a restricted default)
     private static async Task<NpgsqlConnection> OpenAsync(string connectionString)
     {

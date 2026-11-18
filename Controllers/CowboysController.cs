@@ -23,4 +23,13 @@ public class CowboysController : ControllerBase
     {
         return Ok(await CowboyStore.GetAllAsync(_connectionString));
     }
+
+    /// <summary>POST /api/cowboys/5/raise - gives one cowboy a 10% raise and returns the new salary.</summary>
+    [HttpPost("{id}/raise")]
+    public async Task<IActionResult> Raise(int id)
+    {
+        var salary = await CowboyStore.RaiseSalaryAsync(_connectionString, id);
+        if (salary == null) return NotFound();
+        return Ok(new { id, salary });
+    }
 }
