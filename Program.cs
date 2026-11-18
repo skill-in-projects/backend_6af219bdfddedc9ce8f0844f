@@ -154,6 +154,18 @@ catch (Exception candidateEx)
     app.Logger.LogError(candidateEx, "Could not set up the candidate tables: {Message}", candidateEx.Message);
 }
 
+// Create the sign-in users table (skipped when it already exists)
+try
+{
+    var defaultConnection = app.Configuration.GetConnectionString("DefaultConnection");
+    if (!string.IsNullOrEmpty(defaultConnection))
+        await Backend.Services.UserStore.EnsureTableAsync(defaultConnection);
+}
+catch (Exception userEx)
+{
+    app.Logger.LogError(userEx, "Could not set up the users table: {Message}", userEx.Message);
+}
+
 try
 {
 app.Run();
