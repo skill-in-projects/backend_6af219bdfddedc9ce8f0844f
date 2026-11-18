@@ -109,6 +109,7 @@ var app = builder.Build();
 // This ensures it catches all exceptions in the pipeline
 app.UseMiddleware<Backend.Middleware.GlobalExceptionHandlerMiddleware>();
 app.UseMiddleware<Backend.Middleware.ReadOnlyDatabaseMiddleware>();
+app.UseMiddleware<Backend.Middleware.DatabaseRestingMiddleware>();
 
 // Enable Swagger in all environments (including production)
 app.UseSwagger();
@@ -128,6 +129,18 @@ app.MapGet("/", () => new {
     api = "/api/test",
     googleApi = "/api/google/status"
 });
+
+// Create the cowboys table with its 50 sample rows (skipped when the table already has rows)
+try
+{
+    var defaultConnection = app.Configuration.GetConnectionString("DefaultConnection");
+    if (!string.IsNullOrEmpty(defaultConnection))
+        await Backend.Services.CowboyStore.EnsureSampleDataAsync(defaultConnection);
+}
+catch (Exception seedEx)
+{
+    app.Logger.LogError(seedEx, "Could not set up the cowboys table: {Message}", seedEx.Message);
+}
 
 try
 {
