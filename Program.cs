@@ -178,6 +178,18 @@ catch (Exception bikeShopEx)
     app.Logger.LogError(bikeShopEx, "Could not set up the bike shop table: {Message}", bikeShopEx.Message);
 }
 
+// Create the newsletter sign-up table (skipped when it already exists)
+try
+{
+    var defaultConnection = app.Configuration.GetConnectionString("DefaultConnection");
+    if (!string.IsNullOrEmpty(defaultConnection))
+        await Backend.Services.NewsletterStore.EnsureTableAsync(defaultConnection);
+}
+catch (Exception newsletterEx)
+{
+    app.Logger.LogError(newsletterEx, "Could not set up the newsletter table: {Message}", newsletterEx.Message);
+}
+
 try
 {
 app.Run();
