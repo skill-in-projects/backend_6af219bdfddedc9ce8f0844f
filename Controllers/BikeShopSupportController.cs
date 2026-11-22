@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Controllers;
 
-/// <summary>A support agent for a bike shop: answers questions about repairs and opening hours. Each message uses the project's credits. Conversations are saved per customer.</summary>
+/// <summary>A support agent for a bike shop: answers questions about repairs and opening hours. Each message uses the project's credits. Conversations are saved per customer, or per account when the customer is signed in.</summary>
 [ApiController]
 [Route("api/bike-shop/chat")]
 public class BikeShopSupportController : ControllerBase
@@ -14,6 +14,7 @@ public class BikeShopSupportController : ControllerBase
     private const int MaxCustomerIdLength = 64;
     private const int MaxHistory = 10;
     private const int MaxSavedMessages = 50;
+    private const string AccountPrefix = "account:";
     private static readonly string SystemPrompt =
         "You are the customer support agent of a bike shop. Answer customers' questions about repairs and opening hours " +
         "in a friendly, short way, in plain words. Answer only from the shop information below. If the answer is not " +
@@ -38,8 +39,10 @@ public class BikeShopSupportController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetHistory([FromQuery] string customerId)
     {
-        if (!IsValidCustomerId(customerId)) return Ok(new { status = "error", message = "Missing customer." });
-        var messages = await BikeShopStore.GetRecentAsync(_connectionString, customerId, MaxSavedMessages);
+        var (key, signedOut) = ResolveCustomer(customerId);
+        if (signedOut) return Ok(new { status = "signed_out", message = "Please sign in again." });
+        if (key == null) return Ok(new { status = "error", message = "Missing customer." });
+        var messages = await BikeShopStore.GetRecentAsync(_connectionString, key, MaxSavedMessages);
         return Ok(new { status = "ok", messages = messages.Select(m => new { role = m.Role, text = m.Text }) });
     }
 
@@ -47,8 +50,10 @@ public class BikeShopSupportController : ControllerBase
     [HttpDelete]
     public async Task<IActionResult> ClearHistory([FromQuery] string customerId)
     {
-        if (!IsValidCustomerId(customerId)) return Ok(new { status = "error", message = "Missing customer." });
-        await BikeShopStore.ClearAsync(_connectionString, customerId);
+        var (key, signedOut) = ResolveCustomer(customerId);
+        if (signedOut) return Ok(new { status = "signed_out", message = "Please sign in again." });
+        if (key == null) return Ok(new { status = "error", message = "Missing customer." });
+        await BikeShopStore.ClearAsync(_connectionString, key);
         return Ok(new { status = "ok" });
     }
 
@@ -56,15 +61,16 @@ public class BikeShopSupportController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Send([FromBody] ChatRequest request)
     {
-        var customerId = (request.CustomerId ?? "").Trim();
-        if (!IsValidCustomerId(customerId)) return Ok(new { status = "error", message = "Missing customer." });
+        var (key, signedOut) = ResolveCustomer(request.CustomerId);
+        if (signedOut) return Ok(new { status = "signed_out", message = "Please sign in again." });
+        if (key == null) return Ok(new { status = "error", message = "Missing customer." });
         var question = (request.Message ?? "").Trim();
         if (question.Length == 0) return Ok(new { status = "error", message = "Please type a question first." });
         if (question.Length > MaxMessageLength) return Ok(new { status = "error", message = "That message is too long. Please shorten it." });
         if (!GoogleGateway.IsConfigured) return Ok(new { status = "not_configured", message = "The shop assistant is not available in this app yet." });
 
         // Only the last few saved turns are sent with the new question
-        var saved = await BikeShopStore.GetRecentAsync(_connectionString, customerId, MaxHistory);
+        var saved = await BikeShopStore.GetRecentAsync(_connectionString, key, MaxHistory);
         var contents = saved
             .Select(turn => new { role = turn.Role, parts = new[] { new { text = turn.Text } } })
             .Append(new { role = "user", parts = new[] { new { text = question } } })
@@ -100,9 +106,28 @@ public class BikeShopSupportController : ControllerBase
         if (reply.Length == 0) return Ok(new { status = "error", message = "The shop assistant could not answer right now. Please try again." });
 
         // Saved only after a reply, so a failed question does not leave half a conversation
-        await BikeShopStore.AddAsync(_connectionString, customerId, "user", question);
-        await BikeShopStore.AddAsync(_connectionString, customerId, "model", reply);
+        await BikeShopStore.AddAsync(_connectionString, key, "user", question);
+        await BikeShopStore.AddAsync(_connectionString, key, "model", reply);
         return Ok(new { status = "ok", reply });
+    }
+
+    /// <summary>
+    /// Picks the key that saves the conversation. A valid sign-in token wins: the account's own key is used and the
+    /// browser id is ignored. A token that is present but no longer valid returns signedOut. Without a token the
+    /// browser id is used, and it may not borrow an account key.
+    /// </summary>
+    private (string? Key, bool SignedOut) ResolveCustomer(string? customerId)
+    {
+        var header = Request.Headers.Authorization.ToString();
+        if (header.StartsWith("Bearer ", StringComparison.Ordinal))
+        {
+            var userId = JwtService.Validate(header["Bearer ".Length..]);
+            return userId == null ? (null, true) : ($"{AccountPrefix}{userId}", false);
+        }
+
+        var id = (customerId ?? "").Trim();
+        if (!IsValidCustomerId(id) || id.StartsWith(AccountPrefix, StringComparison.Ordinal)) return (null, false);
+        return (id, false);
     }
 
     private static bool IsValidCustomerId(string? customerId) =>
