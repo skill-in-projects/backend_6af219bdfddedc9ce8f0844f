@@ -4,48 +4,73 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Backend.Controllers;
 
-/// <summary>A support agent for a bike shop: answers questions about repairs and opening hours. Each message uses the project's credits.</summary>
+/// <summary>A support agent for a bike shop: answers questions about repairs and opening hours. Each message uses the project's credits. Conversations are saved per customer.</summary>
 [ApiController]
 [Route("api/bike-shop/chat")]
 public class BikeShopSupportController : ControllerBase
 {
     private const string GeminiPath = "/v1beta/models/gemini-3.5-flash-lite:generateContent";
     private const int MaxMessageLength = 1000;
+    private const int MaxCustomerIdLength = 64;
     private const int MaxHistory = 10;
+    private const int MaxSavedMessages = 50;
     private static readonly string SystemPrompt =
         "You are the customer support agent of a bike shop. Answer customers' questions about repairs and opening hours " +
         "in a friendly, short way, in plain words. Answer only from the shop information below. If the answer is not " +
         "in that information, say you are not sure and suggest the customer visit the shop during opening hours. " +
         "Never invent prices, times or policies.\n\nShop information:\n" + BikeShopInfo.Text;
 
-    public class ChatTurn
+    private readonly string _connectionString;
+
+    public BikeShopSupportController(IConfiguration configuration)
     {
-        public string Role { get; set; } = "";
-        public string Text { get; set; } = "";
+        _connectionString = configuration.GetConnectionString("DefaultConnection")
+            ?? throw new InvalidOperationException("Database connection string not found");
     }
 
     public class ChatRequest
     {
+        public string CustomerId { get; set; } = "";
         public string Message { get; set; } = "";
-        public List<ChatTurn> History { get; set; } = new();
     }
 
-    /// <summary>POST /api/bike-shop/chat - One reply from Gemini, given the new question and the earlier turns.</summary>
+    /// <summary>GET /api/bike-shop/chat?customerId=... - the customer's saved conversation, oldest first.</summary>
+    [HttpGet]
+    public async Task<IActionResult> GetHistory([FromQuery] string customerId)
+    {
+        if (!IsValidCustomerId(customerId)) return Ok(new { status = "error", message = "Missing customer." });
+        var messages = await BikeShopStore.GetRecentAsync(_connectionString, customerId, MaxSavedMessages);
+        return Ok(new { status = "ok", messages = messages.Select(m => new { role = m.Role, text = m.Text }) });
+    }
+
+    /// <summary>DELETE /api/bike-shop/chat?customerId=... - clears the customer's saved conversation.</summary>
+    [HttpDelete]
+    public async Task<IActionResult> ClearHistory([FromQuery] string customerId)
+    {
+        if (!IsValidCustomerId(customerId)) return Ok(new { status = "error", message = "Missing customer." });
+        await BikeShopStore.ClearAsync(_connectionString, customerId);
+        return Ok(new { status = "ok" });
+    }
+
+    /// <summary>POST /api/bike-shop/chat - One reply from Gemini, given the new question and the customer's saved earlier turns.</summary>
     [HttpPost]
     public async Task<IActionResult> Send([FromBody] ChatRequest request)
     {
+        var customerId = (request.CustomerId ?? "").Trim();
+        if (!IsValidCustomerId(customerId)) return Ok(new { status = "error", message = "Missing customer." });
         var question = (request.Message ?? "").Trim();
         if (question.Length == 0) return Ok(new { status = "error", message = "Please type a question first." });
         if (question.Length > MaxMessageLength) return Ok(new { status = "error", message = "That message is too long. Please shorten it." });
         if (!GoogleGateway.IsConfigured) return Ok(new { status = "not_configured", message = "The shop assistant is not available in this app yet." });
 
-        // Only the last few turns are sent, and only user and model turns are kept
-        var turns = (request.History ?? new List<ChatTurn>())
-            .Where(turn => turn.Role is "user" or "model" && !string.IsNullOrWhiteSpace(turn.Text))
-            .TakeLast(MaxHistory)
-            .Select(turn => new { role = turn.Role, parts = new[] { new { text = turn.Text } } });
-        var contents = turns.Append(new { role = "user", parts = new[] { new { text = question } } }).ToArray();
+        // Only the last few saved turns are sent with the new question
+        var saved = await BikeShopStore.GetRecentAsync(_connectionString, customerId, MaxHistory);
+        var contents = saved
+            .Select(turn => new { role = turn.Role, parts = new[] { new { text = turn.Text } } })
+            .Append(new { role = "user", parts = new[] { new { text = question } } })
+            .ToArray();
 
+        string reply;
         try
         {
             var body = JsonSerializer.Serialize(new
@@ -66,15 +91,22 @@ public class BikeShopSupportController : ControllerBase
             if (!response.IsSuccessStatusCode) return Ok(new { status = "error", message = "The shop assistant could not answer right now. Please try again." });
 
             using var doc = JsonDocument.Parse(text);
-            var reply = doc.RootElement.GetProperty("candidates")[0].GetProperty("content").GetProperty("parts")[0].GetProperty("text").GetString()?.Trim();
-            if (string.IsNullOrEmpty(reply)) return Ok(new { status = "error", message = "The shop assistant could not answer right now. Please try again." });
-            return Ok(new { status = "ok", reply });
+            reply = doc.RootElement.GetProperty("candidates")[0].GetProperty("content").GetProperty("parts")[0].GetProperty("text").GetString()?.Trim() ?? "";
         }
         catch (Exception)
         {
             return Ok(new { status = "error", message = "The shop assistant could not answer right now. Please try again." });
         }
+        if (reply.Length == 0) return Ok(new { status = "error", message = "The shop assistant could not answer right now. Please try again." });
+
+        // Saved only after a reply, so a failed question does not leave half a conversation
+        await BikeShopStore.AddAsync(_connectionString, customerId, "user", question);
+        await BikeShopStore.AddAsync(_connectionString, customerId, "model", reply);
+        return Ok(new { status = "ok", reply });
     }
+
+    private static bool IsValidCustomerId(string? customerId) =>
+        !string.IsNullOrWhiteSpace(customerId) && customerId.Length <= MaxCustomerIdLength;
 
     private static string? ReadCode(string text)
     {

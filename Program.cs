@@ -166,6 +166,18 @@ catch (Exception userEx)
     app.Logger.LogError(userEx, "Could not set up the users table: {Message}", userEx.Message);
 }
 
+// Create the bike shop conversation table (skipped when it already exists)
+try
+{
+    var defaultConnection = app.Configuration.GetConnectionString("DefaultConnection");
+    if (!string.IsNullOrEmpty(defaultConnection))
+        await Backend.Services.BikeShopStore.EnsureTableAsync(defaultConnection);
+}
+catch (Exception bikeShopEx)
+{
+    app.Logger.LogError(bikeShopEx, "Could not set up the bike shop table: {Message}", bikeShopEx.Message);
+}
+
 try
 {
 app.Run();
