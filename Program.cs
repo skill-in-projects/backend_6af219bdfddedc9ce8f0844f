@@ -202,6 +202,18 @@ catch (Exception repairEx)
     app.Logger.LogError(repairEx, "Could not set up the repair bookings table: {Message}", repairEx.Message);
 }
 
+// Create the truck drivers table with its 30 sample rows (skipped when the table already has rows)
+try
+{
+    var defaultConnection = app.Configuration.GetConnectionString("DefaultConnection");
+    if (!string.IsNullOrEmpty(defaultConnection))
+        await Backend.Services.TruckDriverStore.EnsureSampleDataAsync(defaultConnection);
+}
+catch (Exception truckEx)
+{
+    app.Logger.LogError(truckEx, "Could not set up the truck drivers table: {Message}", truckEx.Message);
+}
+
 try
 {
 app.Run();
