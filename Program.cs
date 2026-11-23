@@ -190,6 +190,18 @@ catch (Exception newsletterEx)
     app.Logger.LogError(newsletterEx, "Could not set up the newsletter table: {Message}", newsletterEx.Message);
 }
 
+// Create the repair bookings table with sample bookings for today (skipped when it already has rows)
+try
+{
+    var defaultConnection = app.Configuration.GetConnectionString("DefaultConnection");
+    if (!string.IsNullOrEmpty(defaultConnection))
+        await Backend.Services.RepairBookingStore.EnsureTableAsync(defaultConnection);
+}
+catch (Exception repairEx)
+{
+    app.Logger.LogError(repairEx, "Could not set up the repair bookings table: {Message}", repairEx.Message);
+}
+
 try
 {
 app.Run();
